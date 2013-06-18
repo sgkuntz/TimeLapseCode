@@ -1,0 +1,63 @@
+%%% this program averages images representing a single event to get a probabilistic model
+instructionfile = fopen('/Users/eisenlab/Desktop/Imaging/Events/instructionsForDorsalVentralImages.txt','r');
+instructions = textscan(instructionfile, '%s %s');
+fclose(instructionfile);
+
+nEvents = length(instructions{1})
+% nEvents = 2
+
+for (j = 1:nEvents)
+	eventFolder = instructions{1}{j}
+	starterFile = instructions{2}{j};	
+	
+	cd /Users/eisenlab/Desktop/Imaging/Events/
+	cd(eventFolder)
+	% cd lateral
+	cd dorsalVentral
+
+	p = which(starterFile);
+	mkdir edges
+ 	mkdir background
+	mkdir composites
+
+	% need to check what the rotation is and address it accordingly
+	filelist = dir([fileparts(p) filesep '*Pos*_S*_Crop*_t*_z*.jpg']);
+	fileNames = {filelist.name}';
+	I = imread(fileNames{1}); [mRows,nColumns] = size(I); nImages = length(fileNames);
+
+	% average images (original, edge-detected, and background-subtracted) over series
+	ST = zeros(mRows, nColumns);
+	SU = zeros(mRows, nColumns);
+	SV = zeros(mRows, nColumns);
+	counter = 0;
+	for (k = 1:nImages)
+		I = imread(fileNames{k});
+		I2a = I(:,:,1);
+		I2 = imadjust(I2a, [0.05; 0.95], [0; 1]);
+		[junk threshold] = edge(I2, 'sobel'); BWs = edge(I2, 'sobel', threshold*0.5); seD = strel('diamond',1); BWsclose = imclose(BWs, seD); BWsdil = imdilate(BWsclose, seD); BWsclose2 = imclose(BWsdil, seD);
+		background = imopen(I2, strel('disk',10)); set(gca, 'ydir','reverse'); I_nobackground = I2-background; I_adjusted = imadjust(I_nobackground);
+		T = zeros(mRows,nColumns);
+		U = zeros(mRows,nColumns);
+		V = zeros(mRows,nColumns);
+		for x = 1:mRows
+			for y = 1:nColumns
+				T(x,y) = I2(x,y);
+				U(x,y) = BWsclose2(x,y);
+				V(x,y) = I_adjusted(x,y);
+			end
+		end
+		ST = ST+T;
+		SU = SU+U;
+		SV = SV+V;
+		counter = counter + 1;
+		clearvars -global I* BW*;
+	end
+	AT = mat2gray(ST/counter); AU = mat2gray(SU/counter); AV = mat2gray(SV/counter);
+	% figure, imshow(AT);
+	% figure, imshow(AU);
+	% figure, imshow(AV);
+	f = horzcat('composites/', char(eventFolder),'.jpg'); imwrite (AT, f, 'png');
+	f = horzcat('edges/', char(eventFolder),'.jpg'); imwrite (AU, f, 'png');
+	f = horzcat('background/', char(eventFolder),'.jpg'); imwrite (AV, f, 'png');
+	clearvars -global I* S* A* T* U* V*;
+end

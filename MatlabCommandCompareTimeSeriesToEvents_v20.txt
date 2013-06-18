@@ -1,0 +1,451 @@
+%%% This program compares each of the probabilistic models for events to all images in a time series and returns the max cross-correlation scores for each comparison.
+clearvars *
+
+%%% STAGE 1 - PROCESS TIME-LAPSE IMAGES
+
+% the directory with the time series of interest is identified
+timelapsefile = fopen('/Users/eisenlab/Desktop/Imaging/TimeLapseInstructions_notRun_trial15.txt','r');
+timelapseinfo = textscan(timelapsefile, '%s %s %s %s %s %s %s %s %s %s %s');
+fclose(timelapsefile);
+
+for (w = 1:length(timelapseinfo{1}))
+	try
+
+		% go through each image and run the cross-correlation
+		corrs_e = []; corrs_c = []; sums_c = [];
+		cycleCounter = 0;
+	
+		startingDate = timelapseinfo{1}{w}
+		startingPosition = timelapseinfo{2}{w}
+		starterImage = timelapseinfo{3}{w};
+		imageOrientation = timelapseinfo{4}{w};
+		fileNameScheme = timelapseinfo{5}{w};
+		mry = timelapseinfo{6}{w};
+		tracheaFill = timelapseinfo{7}{w};
+		species = timelapseinfo{8}{w};
+		temperature = timelapseinfo{9}{w};
+		timeDilation = timelapseinfo{10}{w};
+		zPosition = timelapseinfo{11}{w}
+
+		x = str2num(imageOrientation);
+
+		% cd /Users/eisenlab/Desktop/Imaging/
+		cd /Volumes/Agkistrodon/Imaging/
+		cd(startingDate)
+		cd(startingPosition)
+		mkdir aligned
+		p = which(starterImage);
+		filelist = dir([fileparts(p) filesep fileNameScheme]);
+		fileNames = {filelist.name}';
+		I = imread(fileNames{1}); I2 = I(:,:,1); [mRows,nColumns] = size(I); nImages = length(fileNames);
+		% figure out references for major and minor axis lengths
+		[junk threshold] = edge(I2, 'sobel'); BWs = edge(I2, 'sobel', threshold*0.5); seD = strel('diamond',1); BWsclose = imclose(BWs, seD); BWsdil = imdilate(BWsclose, seD); BWsclose2 = imclose(BWsdil, seD); BWdfill = imfill(BWsclose2, 'holes'); cc = bwconncomp(BWdfill, 4); objectData = regionprops(cc,'basic'); objectAreas = [objectData.Area]; [max_area, idx] = max(objectAreas);  emb = false(size(BWdfill)); emb(cc.PixelIdxList{idx}) = true; M_emb = ~false(size(emb)); I2(M_emb&~emb) = 0;
+		centroidDataRef = regionprops(emb,'Centroid'); majorAxisDataRef = regionprops(emb,'MajorAxisLength'); minorAxisDataRef = regionprops(emb,'MinorAxisLength'); orientationDataRef = regionprops(emb,'Orientation');
+
+		% first run through zoomed out (every 15 images)
+		% have to generate the file naming based on a string attached to a str(number) that can be iterated
+		% once done, have to figure out measurements for running through more zoomed in
+	
+		for (k = 1:nImages)
+			I = imread(fileNames{k}); I2 = I(:,:,1);
+			% add a border before running the analysis
+			borderColor = I2(2,2);
+			I2 = padarray(I2, [2 2], borderColor);
+			[junk threshold] = edge(I2, 'sobel'); BWs = edge(I2, 'sobel', threshold*0.5); seD = strel('diamond',1); BWsclose = imclose(BWs, seD); BWsdil = imdilate(BWsclose, seD); BWsclose2 = imclose(BWsdil, seD); BWdfill = imfill(BWsclose2, 'holes'); cc = bwconncomp(BWdfill, 4); objectData = regionprops(cc,'basic'); objectAreas = [objectData.Area]; [max_area, idx] = max(objectAreas);  emb = false(size(BWdfill)); emb(cc.PixelIdxList{idx}) = true; M_emb = ~false(size(emb)); I2(M_emb&~emb) = 0;
+
+			% determine the centroid, major and minor axes, orientation, and bounding box
+			centroidData = regionprops(emb,'Centroid'); centroidData; majorAxisData = regionprops(emb,'MajorAxisLength'); majorAxisData; minorAxisData = regionprops(emb,'MinorAxisLength'); minorAxisData; orientationData = regionprops(emb,'Orientation'); orientationData;
+
+			if 1.1*majorAxisDataRef.MajorAxisLength > majorAxisData.MajorAxisLength
+				if 0.9*majorAxisDataRef.MajorAxisLength < majorAxisData.MajorAxisLength
+					validSizing = true;
+				else
+					majorAxisData.MajorAxisLength = majorAxisDataRef.MajorAxisLength;
+					minorAxisData.MinorAxisLength = minorAxisDataRef.MinorAxisLength;
+					centroidData.Centroid = centroidDataRef.Centroid;
+					orientationData.Orientation = orientationDataRef.Orientation;
+				end
+			else
+				majorAxisData.MajorAxisLength = majorAxisDataRef.MajorAxisLength;
+				minorAxisData.MinorAxisLength = minorAxisDataRef.MinorAxisLength;
+				centroidData.Centroid = centroidDataRef.Centroid;
+				orientationData.Orientation = orientationDataRef.Orientation;
+			end
+
+			% translate/center and resize the image
+			standardLength = 700; standardWidth = 245;
+			if orientationData.Orientation > 0
+				inputCoor = [centroidData.Centroid(1) centroidData.Centroid(2); centroidData.Centroid(1)+0.5*majorAxisData.MajorAxisLength*cosd(orientationData.Orientation) centroidData.Centroid(2)-0.5*majorAxisData.MajorAxisLength*sind(orientationData.Orientation); centroidData.Centroid(1)-0.5*minorAxisData.MinorAxisLength*sind(orientationData.Orientation) centroidData.Centroid(2)-0.5*minorAxisData.MinorAxisLength*cosd(orientationData.Orientation)];
+			elseif orientationData.Orientation < 0
+				inputCoor = [centroidData.Centroid(1) centroidData.Centroid(2); centroidData.Centroid(1)-0.5*majorAxisData.MajorAxisLength*cosd(orientationData.Orientation) centroidData.Centroid(2)+0.5*majorAxisData.MajorAxisLength*sind(orientationData.Orientation); centroidData.Centroid(1)+0.5*minorAxisData.MinorAxisLength*sind(orientationData.Orientation) centroidData.Centroid(2)+0.5*minorAxisData.MinorAxisLength*cosd(orientationData.Orientation)];
+			end
+
+			outputCoor = [125 5+(standardLength/2); 125 5; 5 5+(standardLength/2)];
+			transformationMatrix = maketform('affine',inputCoor, outputCoor);
+			I_final = imtransform(I2, transformationMatrix, 'bicubic', 'XData', [1 250],'YData', [1 705]);
+			M_final = ~imtransform(true(size(I2)), transformationMatrix, 'bicubic', 'XData', [1 250],'YData', [1 705]); 
+			I_final(M_final&~imclearborder(M_final)) = 0;		
+
+			[junk threshold] = edge(I_final, 'sobel'); BWs = edge(I_final, 'sobel', threshold*0.5); seD = strel('diamond',1); BWsclose = imclose(BWs, seD); BWsdil = imdilate(BWsclose, seD); BWsclose2 = imclose(BWsdil, seD); background = imopen(I_final, strel('disk',10)); set(gca, 'ydir','reverse');
+
+			if x == 3	
+				I_final = imrotate(I_final, 180);
+				BWsclose2 = imrotate(BWsclose2, 180);
+				orientation = 0;
+			elseif x == 2
+				I_final = fliplr(I_final);
+				BWsclose2 = fliplr(BWsclose2);
+				orientation = 0;
+			elseif x == 4
+				I_final = imrotate(I_final, 180); I_final = fliplr(I_final);
+				BWsclose2 = imrotate(BWsclose2, 180); BWsclose2 = fliplr(BWsclose2);
+				orientation = 0;
+			elseif x == 6
+				I_final = I_final;
+				orientation = 1;
+			elseif x == 5
+				I_final = imrotate(I_final, 180);
+				BWsclose2 = imrotate(BWsclose2, 180);
+				orientation = 1;
+			elseif x == 1
+				I_final = I_final;
+				orientation = 0;
+			else
+				I_final = I_final;
+			end
+
+			% save image 
+			% f = fullfile('/Users','eisenlab','Desktop','Imaging','aligned',fileNames{k}); imwrite(I_final, f, 'png');
+			f = fullfile('aligned',fileNames{k}); imwrite(I_final, f, 'png');
+			cycleCounter = cycleCounter + 1;
+		end
+
+
+
+		%%% STAGE 2 - CROSS-CORRELATIONS
+		cci_events = []; c2i_events = []; ccs_events = []; cci_events_sgf51 = []; cci_events_sgffft = []; 
+
+		% the directory with the reference probabilistic events is identified
+		if orientation == 0
+			instructionfile = fopen('/Users/eisenlab/Desktop/Imaging/Events/0compositeImages/compositeImagesInstructions.txt','r');
+		elseif orientation == 1
+			instructionfile = fopen('/Users/eisenlab/Desktop/Imaging/Events/1compositeImages/compositeImagesInstructions.txt','r');
+		end
+
+		instructions = textscan(instructionfile, '%s %s %s');
+		fclose(instructionfile);
+
+		nEvents = length(instructions{1});
+		% loop through all the events
+		eventcorr = [];
+		for (j = 1:nEvents)
+			% for each event, compare all images in the time series and record the max values of comparison
+%			compositeFileName = instructions{1}{j};
+%			eventNumber = instructions{2}{j};
+			compositeEventName = instructions{3}{j}
+			
+			if orientation == 0
+				cd /Users/eisenlab/Desktop/Imaging/Events/0compositeImages
+			elseif orientation == 1
+				cd /Users/eisenlab/Desktop/Imaging/Events/1compositeImages
+			end			
+
+			Rt = imread(instructions{1}{j}); R = Rt(:,:,1);
+
+			%%% DOWNSAMPLE AND CROSS-CORRELATE
+
+			% run through all the saved images
+			% cd /Users/eisenlab/Desktop/Imaging/
+			cd /Volumes/Agkistrodon/Imaging/
+			cd(startingDate)
+			cd(startingPosition)
+			cd aligned
+			p = which(starterImage);
+			filelist = dir([fileparts(p) filesep fileNameScheme]);
+			fileNames = {filelist.name}'; nImages = length(fileNames);
+		
+			cci_images = [];
+			for (k = 1:nImages) % this loop goes through each image
+				I = imread(fileNames{k}); 
+
+				% cross-correlate the entire images
+				try
+					c2_image = corr2(I,R);
+				catch
+					max_cci = 0.0000;	
+				end
+		
+				cci_images = horzcat(cci_images, c2_image); % this creates arrays across images through time-lapse
+			end
+
+			if j ==1
+				neutralBase = cci_images; % this is the maxContrast image	
+			end
+			cci_events = vertcat(cci_events, cci_images);
+
+			% now that time-series for a single event has been created, need to smooth each individual tile-series
+			sums_fft_c = []; sums_afft_c = []; sums_sgf_c = []; cci_images_norm = [];
+			[y_max, x_max] = size(cci_images);
+			cci_sgf = sgolayfilt(cci_images, 4, 41);
+			for l = 1:length(cci_images)
+				cci_images_norm = horzcat(cci_images_norm, cci_images(l));
+			end
+
+			fft_cci = fft(cci_images_norm);
+			fft_cci(round(x_max/2)-round(0.30*length(cci_images))+1:round(x_max/2)+round(0.30*length(cci_images))) = zeros(round(0.30*length(cci_images))+round(0.30*length(cci_images)),1);
+			cci_fft40 = real(ifft(fft_cci)); cci_sgffft = sgolayfilt(cci_fft40, 4, 41);
+			cci_events_sgffft = vertcat(cci_events_sgffft, cci_sgffft);
+		end
+
+		% export the files, need to include z information
+		cci_events_sgffftt = transpose(cci_events_sgffft);
+
+		% calculate the averages across cross-correlations
+		avg_cci_events_sft = mean(cci_events_sgffftt,2);
+		for (t = 1:nImages)
+			cci_events_sgffftt(t,:) = cci_events_sgffftt(t,:)/avg_cci_events_sft(t);
+		end
+
+		cd /Users/eisenlab/Desktop/Imaging/
+		savefile_st = horzcat('TrainingSet_', char(startingDate), '_', char(startingPosition),'_', char(zPosition), '_ComparisonsImageSGFFFT_avg.txt'); dlmwrite(savefile_st, cci_events_sgffftt, 'delimiter', '\t', 'precision', '%.6f');
+
+
+		%%% STAGE 3 - DETERMINE THE SCALING AND WEIGH THE TRACES
+		instructionfile = fopen('/Users/eisenlab/Desktop/Imaging/Events/0compositeImages/compositeImagesInstructions.txt','r');
+		instructions = textscan(instructionfile, '%s %s %s'); fclose(instructionfile); nEvents = length(instructions{1});
+
+		% read in NormalizedTimingData.txt (generated by EventDistributionWeights_v1.py) and generate the relevant gamma distributions to weigh data
+		normalizedTiming = dlmread('/Users/eisenlab/Dropbox/NormalizedTimingData.txt', '\t');
+
+		% first determine the start (membrane reaches yolk) and end (hatch) points
+		% identify the membrane_reaches_yolk (mry) peak, should correspond to the maximum from column 8 of cci_events_sgffftt
+		% use the input 'membrane reaches yolk' definition
+		mry_peak = str2num(mry);
+		trachea_peak = str2num(tracheaFill);
+
+		% figure
+		% go through each peak and obtain the coordinates
+		cci_events_sftw = []; sdList = []; ccs_events_sftw = [];
+
+		% normalize via the average across cross-correlations
+		for (peak = 2:nEvents) % this excludes max_contrast
+			if peak ~= 8 % this excludes the membrane reaches yolk peak
+				if peak ~= 21 % this excludes a max_contrast filler image holding the place of gnathal_bud_appears
+					if peak ~= 35 % this excludes a trachea fill peak
+						eventName = instructions{3}{peak}; % identify the name of the event
+						G = normalizedTiming(peak-1:38:38*length(normalizedTiming)); % cycle through the reference times?
+						g = sort(G(find(G,1,'first'):find(G,1,'last'))); % get rid of all zeros
+%						g = sparse(normalizedTiming(:,peak-1));
+						[g_mean, g_sd] = normfit(g); % identify shape of distribution
+						y = normpdf(g, g_mean, g_sd); % create the probability distribution function
+						sdList = vertcat(sdList, g_sd); 
+	
+
+						% import the corresponding cci_events_sgffftt column and amplify accordingly (level determined by y)
+						event = cci_events_sgffftt(:,peak);
+	
+						% go through each point in the peak and re-scale it
+						g_rev = [];
+						repeat = 0;
+						last_value = 0;
+						% this re-scales the timing of events to the normalized level
+						t_rev_lower = round(((trachea_peak-mry_peak)*(g(1)-250)/1750) + mry_peak); 
+						t_rev_upper = round(((trachea_peak-mry_peak)*(g(end)-250)/1750) + mry_peak); 
+						g_rev_mean = round(((trachea_peak-mry_peak)*(g_mean-250)/1750) + mry_peak); 
+
+						g_rev = t_rev_lower:t_rev_upper;
+						g_rev2 = t_rev_lower-(g_rev_mean-t_rev_lower):t_rev_upper+(t_rev_upper-g_rev_mean);
+						g_rev4 = t_rev_lower-2*(g_rev_mean-t_rev_lower):t_rev_upper+2*(t_rev_upper-g_rev_mean);
+
+						% generate a new distribution with the scaled template
+						y_rev = normpdf(g_rev, g_rev_mean, g_sd);
+						% need to expand the base size of this before amplifying
+						y_rev2 = normpdf(g_rev2, g_rev_mean, 2*g_sd);
+						y_rev4 = normpdf(g_rev4, g_rev_mean, 4*g_sd);
+					
+						% weigh the peaks according to the normalized standard
+						for (t=1:length(g_rev))
+							if g_rev(t) > 0
+								if g_rev(t) < length(event)
+									event(g_rev(t)) = event(g_rev(t)) + y_rev(t)*2.5*event(g_rev(t));
+								end
+							end
+						end
+						for (t=1:length(g_rev2))
+							if g_rev2(t) > 0
+								if g_rev2(t) < length(event)
+									event(g_rev2(t)) = event(g_rev2(t)) + y_rev2(t)*5*event(g_rev2(t));
+								end
+							end
+						end
+						for (t=1:length(g_rev4))
+							if g_rev4(t) > 0
+								if g_rev4(t) < length(event)
+									event(g_rev4(t)) = event(g_rev4(t)) + y_rev4(t)*10*event(g_rev4(t));
+								end
+							end
+						end
+						cci_events_sftw = horzcat(cci_events_sftw, event);
+
+%						plot(g_rev,y_rev,'')
+%						text(g_rev(10),y_rev(find(y_rev==max(y_rev))),eventName)
+%						hold on
+					elseif peak == 35
+						event = cci_events_sgffftt(:,peak);
+						cci_events_sftw = horzcat(cci_events_sftw, event);
+						sdList = vertcat(sdList, g_sd);	
+					end
+				end
+			elseif peak == 8
+				event = cci_events_sgffftt(:,peak);
+				cci_events_sftw = horzcat(cci_events_sftw, event);
+				sdList = vertcat(sdList, g_sd);	
+			end
+		end
+		hold off
+
+		cd /Users/eisenlab/Desktop/Imaging/
+		savefile_st = horzcat('TrialSubsets_', char(startingDate), '_', char(startingPosition),'_', char(zPosition),  '_ComparisonsImageSFTAW_avg.txt'); dlmwrite(savefile_st, cci_events_sftw, 'delimiter', '\t', 'precision', '%.6f');
+
+
+
+		%%% STAGE 4 - DETERMINE EVENT ORDER AND TIME	
+		% start with a small number of events and first determine the maxima, then trim subsequent entries
+		eventTimes = [];
+
+		% for items 1 through 7 (max contrast has been removed from the first column by this point) - no trimming
+		for (x = 1:6)
+			event = cci_events_sftw(:,x);
+			for (b = mry_peak:length(event))
+				event(b) = 0;
+			end
+			globalMax = find(event==max(event));
+			eventTimes = horzcat(eventTimes, globalMax);
+		end
+		eventTimes = horzcat(eventTimes, mry_peak); % identify mry time
+		% for items 8 through 15, trim by the max at item 7, then extend trim to the change in the first derivative
+		for (x = 8:15)
+			event = cci_events_sftw(:,x);
+			% first, find out the end of the previous peak
+			c_old = 0; slope = -1;
+
+			% may want to skip this slope skipping (or at least shift it) for this set to prevent the jump way past mry
+			% for (c=mry_peak-5:length(event))
+			for (c=mry_peak:length(event)) % cycle through the trace to scan the slope
+				if slope <= 0 % if the slope is negative, track it
+					slope = c-c_old; % define new slope (if positive, then the loop will be stopped)
+					if slope > 0 % if the slope is now positive, redefine the limit
+						limit = c;
+					end
+					c_old = c;
+				end
+			end
+			% rather than trimming, can zero-out the first section
+			for (a = 1:limit)
+				event(a) = 0;
+			end
+			for (b = trachea_peak:length(event))
+				event(b) = 0;
+			end
+			globalMax = find(event==max(event)); % if trimmed, this will no longer be an absolute value
+			if x == 13
+				max13 = globalMax;
+			end
+			eventTimes = horzcat(eventTimes, globalMax);
+		end
+
+		% for items 16 through 21, trim by the max at item 13
+		for (x = 16:21)
+			event = cci_events_sftw(:,x);
+			% first, find out the end of the previous peak
+			c_old = 0; slope = -1;
+			for (c=mry_peak:length(event))
+				if slope <= 0
+					slope = c-c_old;
+					if slope > 0
+						limit = c;
+					end
+					c_old = c;
+				end
+			end
+
+			% trim by globalMax for 13
+			for (a = 1:limit)
+				event(a) = 0;
+			end
+			for (b = trachea_peak:length(event))
+				event(b) = 0;
+			end
+			globalMax = find(event==max(event));
+			if x == 18
+				max18 = globalMax;
+			end
+			eventTimes = horzcat(eventTimes, globalMax);
+		end
+
+		% for items 22 through 27, trim by the max at item 18
+		for (x = 22:27)
+			event = cci_events_sftw(:,x);
+				% first, find out the end of the previous peak
+			c_old = 0; slope = -1;
+			for (c=max18:length(event))
+				if slope <= 0
+					slope = c-c_old;
+					if slope > 0
+						limit = c;
+					end
+					c_old = c;
+				end
+			end
+			% trim by globalMax for 18
+			for (a = 1:limit)
+				event(a) = 0;
+			end
+			for (b = trachea_peak:length(event))
+				event(b) = 0;
+			end
+			globalMax = find(event==max(event));
+			if x == 22
+				max22 = globalMax;
+			end
+			eventTimes = horzcat(eventTimes, globalMax);
+		end
+
+		% for items 28 through 33, trim by the max at item 22
+		for (x = 28:33)
+			event = cci_events_sftw(:,x);
+				% first, find out the end of the previous peak
+			c_old = 0; slope = -1;
+			for (c=max22:length(event))
+				if slope <= 0
+					slope = c-c_old;
+					if slope > 0
+						limit = c;
+					end
+					c_old = c;
+				end
+			end
+			% trim by globalMax for 22
+			for (a = 1:limit) 
+				event(a) = 0;
+			end
+			for (b = trachea_peak:length(event))
+				event(b) = 0;
+			end
+			globalMax = find(event==max(event));
+			eventTimes = horzcat(eventTimes, globalMax);
+		end
+	
+		eventTimes = horzcat(eventTimes, trachea_peak); % add in time for trachea peak
+		eventTimes = horzcat(eventTimes, nImages); % add in time for hatch
+
+		cd /Users/eisenlab/Desktop/Imaging/
+		savefile_st = horzcat('TrialSubsets_', char(startingDate), '_', char(startingPosition),'_', num2str(zPosition), '_EventTimesTrial_avg_', char(species), '_', char(temperature),'_',char(timeDilation),'.txt'); dlmwrite(savefile_st, eventTimes, 'delimiter', '\t', 'precision', '%.6f');
+
+	catch
+		failedRun = startingDate 
+		failedRun = startingPosition
+		cd /Users/eisenlab/Desktop/Imaging/
+		savefile_st = horzcat('TrialSubsets_', char(startingDate), '_', char(startingPosition),'_', num2str(zPosition), '_EventTimesTrial_failed_', char(species), '_', char(temperature),'_',char(timeDilation),'.txt'); dlmwrite(savefile_st,'%.6f');
+	end
+end
